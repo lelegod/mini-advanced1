@@ -1,1 +1,3 @@
-.pt
+*.pt
+*.pth
+__pycache__/

@@ -2,3 +2,4 @@
 *.pth
 __pycache__/
 .DS_store
+tasks.py

@@ -31,6 +31,10 @@ if __name__ == "__main__":
         datasets.MNIST('data/', train=True, download=True, transform=transform),
         batch_size=args.batch_size, shuffle=True
     )
+    mnist_test_loader = torch.utils.data.DataLoader(
+        datasets.MNIST('data/', train=False, download=True, transform=transform),
+        batch_size=args.batch_size, shuffle=False
+    )
 
     # Define VAE model
     model = create_vae_model(args.prior, args.latent_dim, device)

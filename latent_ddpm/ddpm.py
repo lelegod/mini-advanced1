@@ -7,9 +7,11 @@ import torch.distributions as td
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from config import DDPM_BETA_1, DDPM_BETA_T
+
 
 class DDPM(nn.Module):
-    def __init__(self, network, beta_1=1e-4, beta_T=2e-2, T=100):
+    def __init__(self, network, beta_1=None, beta_T=None, T=100):
         """
         Initialize a DDPM model.
 
@@ -25,11 +27,11 @@ class DDPM(nn.Module):
         """
         super(DDPM, self).__init__()
         self.network = network
-        self.beta_1 = beta_1
-        self.beta_T = beta_T
+        self.beta_1 = beta_1 if beta_1 is not None else DDPM_BETA_1
+        self.beta_T = beta_T if beta_T is not None else DDPM_BETA_T
         self.T = T
 
-        self.beta = nn.Parameter(torch.linspace(beta_1, beta_T, T), requires_grad=False)
+        self.beta = nn.Parameter(torch.linspace(self.beta_1, self.beta_T, T), requires_grad=False)
         self.alpha = nn.Parameter(1 - self.beta, requires_grad=False)
         self.alpha_cumprod = nn.Parameter(self.alpha.cumprod(dim=0), requires_grad=False)
     
@@ -68,7 +70,7 @@ class DDPM(nn.Module):
         neg_elbo = F.mse_loss(epsilon_theta, epsilon, reduction='none')
         neg_elbo = neg_elbo.sum(dim=1) 
 
-        return neg_elbo
+        return neg_elbo.mean()
 
     def sample(self, shape):
         """
@@ -173,8 +175,10 @@ class FcNetwork(nn.Module):
             The number of hidden units in the network.
         """
         super(FcNetwork, self).__init__()
-        self.network = nn.Sequential(nn.Linear(input_dim+1, num_hidden), nn.ReLU(), 
-                                     nn.Linear(num_hidden, num_hidden), nn.ReLU(), 
+        self.network = nn.Sequential(nn.Linear(input_dim+1, num_hidden), nn.LayerNorm(num_hidden), nn.GELU(),
+                                     nn.Linear(num_hidden, num_hidden), nn.LayerNorm(num_hidden), nn.GELU(),
+                                     nn.Linear(num_hidden, num_hidden), nn.LayerNorm(num_hidden), nn.GELU(),
+                                     nn.Linear(num_hidden, num_hidden), nn.LayerNorm(num_hidden), nn.GELU(),
                                      nn.Linear(num_hidden, input_dim))
 
     def forward(self, x, t):

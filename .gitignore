@@ -2,3 +2,7 @@
 *.pth
 __pycache__/
 .DS_store
+data/
+beta_1/
+beta_1e-3/
+beta_1e-6/

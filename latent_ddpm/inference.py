@@ -27,16 +27,16 @@ if __name__ == "__main__":
     z_mean, z_std = stats['mean'], stats['std']
 
     num_samples_grid = 1
-    
-    with torch.no_grad():
-        sampled_z = latent_ddpm.sample((num_samples_grid, M)).to(device)
-        sampled_z = (sampled_z * z_std) + z_mean
-        generated_images = vae_model.decoder(sampled_z).mean
-        
-        generated_images = generated_images.view(num_samples_grid, 1, 28, 28)
-        generated_images = (generated_images / 2) + 0.5
-        save_image(generated_images, 'samples/sample_pic.png', nrow=2)
-        print(f"Saved {num_samples_grid} samples to sample_grid_2x2.png")
+    for i in range(100):
+        with torch.no_grad():
+            sampled_z = latent_ddpm.sample((num_samples_grid, M)).to(device)
+            sampled_z = (sampled_z * z_std) + z_mean
+            generated_images = vae_model.decoder(sampled_z).mean
+            
+            generated_images = generated_images.view(num_samples_grid, 1, 28, 28)
+            generated_images = (generated_images / 2) + 0.5
+            save_image(generated_images, f'samples/sample_pic{i}.png', nrow=2)
+            print(f"Saved {num_samples_grid} samples to sample_grid_2x2.png")
 
     # transform = transforms.Compose([
     #     transforms.ToTensor(),

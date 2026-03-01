@@ -66,7 +66,7 @@ class MaskedCouplingLayer(nn.Module):
         z = self.mask * x + (1 - self.mask) * (x - t) * torch.exp(-s)
         
         # Compute log determinant of Jacobian for inverse: -sum of s for masked dimensions
-        log_det_J = -torch.sum(s * self.mask, dim=1)
+        log_det_J = -torch.sum((1 - self.mask) * s, dim=1)
         
         return z, log_det_J
 
@@ -189,6 +189,9 @@ class FlowPrior(nn.Module):
             
         self.flow = Flow(self.base, transformations)
         
+    def forward(self):
+        return self
+
     def log_prob(self, z):
         return self.flow.log_prob(z)
         

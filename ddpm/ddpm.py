@@ -5,10 +5,11 @@ import torch
 import torch.distributions as td
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision
 from torchvision import datasets, transforms
 from tqdm import tqdm
 from unet import Unet
-import torchvision
+
 
 def print_shape(x: torch.Tensor, name: str = ""):
     print(f"{name} shape: {x.shape}")
@@ -367,9 +368,7 @@ if __name__ == "__main__":
         plt.close()
 
     elif args.mode == "sample_mnist":
-        import matplotlib.pyplot as plt
-
-        n = 16
+        n = 128
 
         model.load_state_dict(
             torch.load(args.model, map_location=torch.device(args.device))
@@ -377,13 +376,9 @@ if __name__ == "__main__":
         model.eval()
         with torch.no_grad():
             samples = (print_shape(model.sample((n, D)))).cpu()
-        
+
         samples = samples / 2 + 0.5
         samples = samples.view(-1, 1, 28, 28)
 
         for i in range(n):
-            plt.imshow(samples[i, 0], cmap="gray")
-            plt.axis("off")
-            plt.savefig(f"{args.samples}_{i}.png")
-            plt.close()
-        
+            torchvision.utils.save_image(samples[i], f"{args.samples}_{i}.png")

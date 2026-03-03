@@ -50,6 +50,9 @@ class MoGPrior(nn.Module):
         comp = td.Independent(td.Normal(loc=self.means, scale=torch.exp(0.5 * self.log_vars)), 1)
         return td.MixtureSameFamily(mix, comp)
 
+    def forward(self):
+        return self._get_dist()
+
     def log_prob(self, z):
         return self._get_dist().log_prob(z)
 

@@ -2,13 +2,13 @@
 # Version 1.0 (2024-02-11)
 
 import torch
-import torch.distributions as td
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision
 from torchvision import datasets, transforms
 from tqdm import tqdm
 from unet import Unet
-import torchvision
+
 
 def print_shape(x: torch.Tensor, name: str = ""):
     print(f"{name} shape: {x.shape}")
@@ -69,8 +69,7 @@ class DDPM(nn.Module):
         """
 
         ### Implement Algorithm 1 here ###
-        uniform = td.Uniform(1, self.T)
-        t = uniform.sample((x.shape[0],)).long().to(x.device)
+        t = torch.randint(0, self.T, (x.shape[0],), device=x.device)
         t_normalized = t[:, None].float() / self.T
         epsilon = torch.randn_like(x)
         z_t = (
@@ -100,7 +99,6 @@ class DDPM(nn.Module):
             if t == 0:
                 print("Sampling x_0...")
             ### Implement the remaining of Algorithm 2 here ###
-            covariance = self.beta[t] * torch.eye(shape[1]).to(self.alpha.device)
             noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
             t_normalized = torch.tile(
                 torch.tensor(t).float() / self.T, (shape[0], 1)
@@ -114,7 +112,7 @@ class DDPM(nn.Module):
                     / torch.sqrt(1 - self.alpha_cumprod[t])
                     * self.network(x_t, t_normalized)
                 )
-                + (torch.sqrt(covariance) @ noise.T).T
+                + torch.sqrt(self.beta[t]) * noise
             )
 
         return x_t
@@ -367,9 +365,7 @@ if __name__ == "__main__":
         plt.close()
 
     elif args.mode == "sample_mnist":
-        import matplotlib.pyplot as plt
-
-        n = 16
+        n = 128
 
         model.load_state_dict(
             torch.load(args.model, map_location=torch.device(args.device))
@@ -377,13 +373,9 @@ if __name__ == "__main__":
         model.eval()
         with torch.no_grad():
             samples = (print_shape(model.sample((n, D)))).cpu()
-        
+
         samples = samples / 2 + 0.5
         samples = samples.view(-1, 1, 28, 28)
 
         for i in range(n):
-            plt.imshow(samples[i, 0], cmap="gray")
-            plt.axis("off")
-            plt.savefig(f"{args.samples}_{i}.png")
-            plt.close()
-        
+            torchvision.utils.save_image(samples[i], f"{args.samples}_{i}.png")

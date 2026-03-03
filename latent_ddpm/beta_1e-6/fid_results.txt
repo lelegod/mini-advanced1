@@ -1,0 +1,3 @@
+FID Score: 13.0711
+Real samples: 10000
+Generated samples: 5000

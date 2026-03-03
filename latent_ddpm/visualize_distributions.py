@@ -22,12 +22,12 @@ def plot_latent_distributions():
 
     # Load VAE and DDPM
     vae_model = get_vae_model(m, beta, device)
-    vae_model.load_state_dict(torch.load('beta_vae.pt', map_location=device))
+    vae_model.load_state_dict(torch.load('beta_1e-6/beta_vae.pt', map_location=device))
     vae_model.eval()
 
     network = FcNetwork(input_dim=m, num_hidden=num_hidden)
     latent_ddpm = DDPM(network, T=t).to(device)
-    latent_ddpm.load_state_dict(torch.load('latent_ddpm.pt', map_location=device))
+    latent_ddpm.load_state_dict(torch.load('beta_1e-6/latent_ddpm.pt', map_location=device))
     latent_ddpm.eval()
 
     # Get Aggregate Posterior Samples (from real data)
@@ -41,7 +41,7 @@ def plot_latent_distributions():
     test_loader = torch.utils.data.DataLoader(test_data, batch_size=num_samples, shuffle=True)
     
     real_x = next(iter(test_loader))[0].to(device)
-    stats = torch.load('latent_stats.pt', map_location=device)
+    stats = torch.load('beta_1e-6/latent_stats.pt', map_location=device)
     with torch.no_grad():
         z_posterior = vae_model.encoder(real_x).sample().cpu().numpy()
 
@@ -65,28 +65,35 @@ def plot_latent_distributions():
     df_ddpm = pd.DataFrame(z_ddpm_2d, columns=['PC1', 'PC2'])
 
     plt.figure(figsize=(10, 8))
-    
+
     plt.scatter(z_prior_2d[:, 0], z_prior_2d[:, 1], 
                 alpha=0.15, s=10, color='gray', label='VAE Prior $p(z)=\mathcal{N}(0,I)$')
+
     sns.kdeplot(data=df_post, x='PC1', y='PC2', 
                 color='blue', levels=6, linewidths=2.5, 
                 label='Aggregate Posterior $q_{\phi}(z)$')
+
     sns.kdeplot(data=df_ddpm, x='PC1', y='PC2', 
                 color='red', levels=6, linewidths=2.5, linestyles='--', 
-                label='Latent DDPM $p_{\\theta}(z)$')
+                label='Latent DDPM $p_{\theta}(z)$')
 
-    plt.title(f'Latent Space Comparison (PCA, M={m})')
-    plt.xlabel('Principal Component 1')
-    plt.ylabel('Principal Component 2')
-    
+
+    plt.title(f'Latent Space Comparison (PCA, M={m})', fontsize=28, fontweight='bold')
+    plt.xlabel('Principal Component 1', fontsize=25)
+    plt.ylabel('Principal Component 2', fontsize=25)
+
     from matplotlib.lines import Line2D
     handles = [
         Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', label='VAE Prior $p(z)$'),
         Line2D([0], [0], color='blue', lw=2.5, label='Aggregate Posterior $q_{\phi}(z)$'),
-        Line2D([0], [0], color='red', lw=2.5, linestyle='--', label='Latent DDPM $p_{\\theta}(z)$')
+        Line2D([0], [0], color='red', lw=2.5, linestyle='--', label='Latent DDPM $p_{\theta}(z)$')
     ]
-    plt.legend(handles=handles, loc='upper right')
-    
+
+    plt.legend(handles=handles, loc='lower right', fontsize=22)
+
+    plt.xticks(fontsize=15)
+    plt.yticks(fontsize=15)
+
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig('latent_density_comparison.png')

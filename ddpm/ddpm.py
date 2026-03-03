@@ -2,7 +2,6 @@
 # Version 1.0 (2024-02-11)
 
 import torch
-import torch.distributions as td
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
@@ -70,8 +69,7 @@ class DDPM(nn.Module):
         """
 
         ### Implement Algorithm 1 here ###
-        uniform = td.Uniform(1, self.T)
-        t = uniform.sample((x.shape[0],)).long().to(x.device)
+        t = torch.randint(0, self.T, (x.shape[0],), device=x.device)
         t_normalized = t[:, None].float() / self.T
         epsilon = torch.randn_like(x)
         z_t = (
@@ -101,7 +99,6 @@ class DDPM(nn.Module):
             if t == 0:
                 print("Sampling x_0...")
             ### Implement the remaining of Algorithm 2 here ###
-            covariance = self.beta[t] * torch.eye(shape[1]).to(self.alpha.device)
             noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
             t_normalized = torch.tile(
                 torch.tensor(t).float() / self.T, (shape[0], 1)
@@ -115,7 +112,7 @@ class DDPM(nn.Module):
                     / torch.sqrt(1 - self.alpha_cumprod[t])
                     * self.network(x_t, t_normalized)
                 )
-                + (torch.sqrt(covariance) @ noise.T).T
+                + torch.sqrt(self.beta[t]) * noise
             )
 
         return x_t

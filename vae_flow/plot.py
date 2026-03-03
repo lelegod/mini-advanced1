@@ -1,3 +1,4 @@
+from matplotlib.pyplot import legend
 import torch
 import torch.nn as nn
 import argparse
@@ -68,24 +69,20 @@ if __name__ == "__main__":
     # Plotting
     plt.figure(figsize=(10, 8))
     
-    sns.kdeplot(x=z_prior_2d[:, 0], y=z_prior_2d[:, 1], levels=10, color='blue', alpha=0.6, linewidths=2)
-    scatter = plt.scatter(z_post_2d[:, 0], z_post_2d[:, 1], alpha=0.3, s=5, c=labels, cmap='tab10', edgecolors='none')
+    plt.scatter(z_post_2d[:, 0], z_post_2d[:, 1], s=4, c='gray', edgecolors='none')
+    sns.kdeplot(x=z_prior_2d[:, 0], y=z_prior_2d[:, 1], levels=10, color='blue', alpha=0.7, linewidths=1.5)
     
-    prior_handle = mlines.Line2D([], [], color='blue', linewidth=2)
-    agg_post_handle = mlines.Line2D([], [], marker='o', color='w', markerfacecolor='gray', markersize=8)
+    prior_handle = mlines.Line2D([], [], color='blue', linewidth=2, label='Prior Density')
+    agg_post_handle = mlines.Line2D([], [], marker='o', color='w', markerfacecolor='gray', markersize=6, label='Aggregate Posterior')
     
-    scatter_handles, _ = scatter.legend_elements()
-    
-    plt.legend(
-        handles=[prior_handle, agg_post_handle] + scatter_handles,
-        labels=['Prior Density', 'Aggregate Posterior'] + [f"Digit {i}" for i in range(10)]
-    )
-    plt.title(f'{args.prior.upper()} Prior and Aggregate Posterior (PCA Projected from {args.latent_dim}D)')
-    plt.xlabel('Principal Component 1')
-    plt.ylabel('Principal Component 2')
+    plt.legend(handles=[prior_handle, agg_post_handle], loc='upper right', fontsize=30)
+    plt.title(f'{args.prior.upper()} Prior (PCA, M={args.latent_dim})', fontsize=45)
+    plt.xlabel('Principal Component 1', fontsize=30)
+    # plt.ylabel('Principal Component 2', fontsize=30)
+    plt.tight_layout()
     sample_path = os.path.join(script_dir, f"model/{args.prior}/{args.prior}_run0_sample_plot.png")
     os.makedirs(os.path.dirname(sample_path), exist_ok=True)
-    plt.savefig(sample_path)
+    plt.savefig(sample_path, dpi=150)
     plt.close()
     
     print(f"Explained variance ratio of first 2 PCs: {pca.explained_variance_ratio_}")

@@ -11,7 +11,7 @@ if __name__ == "__main__":
     parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian', 'mog', 'flow'], help='Prior to use for VAE')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device')
     parser.add_argument('--latent-dim', type=int, default=32, metavar='N', help='dimension of latent variable')
-    parser.add_argument('--n-samples', type=int, default=100000, metavar='N', help='number of samples to be generated')
+    parser.add_argument('--n-samples', type=int, default=5000, metavar='N', help='number of samples to be generated')
     parser.add_argument('--generate', action='store_true', help='Set this flag to generate new samples before calculating FID')
 
     args = parser.parse_args()
@@ -29,16 +29,8 @@ if __name__ == "__main__":
     model.load_state_dict(torch.load(model_path, map_location=torch.device(device), weights_only=True))
     model.eval()
     with torch.no_grad():
-        # Warm-up: run a small batch to wake up kernels and move weights into cache
-        _ = model.sample(1000)
-        if device == 'cuda':
-            torch.cuda.synchronize()
-
-        # Timed sampling
         start_time = perf_counter()
         samples = model.sample(args.n_samples)
-        if device == 'cuda':
-            torch.cuda.synchronize()
         end_time = perf_counter()
 
         samples = samples.cpu()

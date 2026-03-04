@@ -21,4 +21,4 @@ module load cuda/11.6
 
 source /dtu/projects/02613_2025/conda/conda_init.sh
 conda activate advanced_machine_learning
-python vae_flow/sample.py --prior flow --device cpu --n-samples 2000000
+python vae_flow/sample.py --prior flow --device cuda --n-samples 5000

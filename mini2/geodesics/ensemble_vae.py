@@ -6,15 +6,17 @@
 #
 # Significant extension by Søren Hauberg, 2024
 
+import os
+from copy import deepcopy
+
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
-import torch.nn as nn
 import torch.distributions as td
+import torch.nn as nn
 import torch.utils.data
 from tqdm import tqdm
-from copy import deepcopy
-import os
-import math
-import matplotlib.pyplot as plt
+
 
 class GaussianPrior(nn.Module):
     def __init__(self, M):
@@ -171,11 +173,14 @@ def curve_energy(interior_pts, z_start, z_end, decoder_net):
     energy: [torch.Tensor] scalar
     """
     # (num_t, latent_dim)
-    curve_pts = torch.cat([
-        z_start.unsqueeze(0),
-        interior_pts,
-        z_end.unsqueeze(0),
-    ], dim=0) # (num_t, latent_dim)
+    curve_pts = torch.cat(
+        [
+            z_start.unsqueeze(0),
+            interior_pts,
+            z_end.unsqueeze(0),
+        ],
+        dim=0,
+    )  # (num_t, latent_dim)
 
     # (num_t, 1, 28, 28)
     decoded = decoder_net(curve_pts)
@@ -185,7 +190,7 @@ def curve_energy(interior_pts, z_start, z_end, decoder_net):
 
     # (num_t-1, 784)
     diffs = decoded_flat[1:] - decoded_flat[:-1]
-    energy = (diffs ** 2).sum()
+    energy = (diffs**2).sum()
     return energy
 
 
@@ -208,9 +213,14 @@ def compute_geodesic(z_start, z_end, decoder_net, num_t=20, lr=1e-2, num_steps=5
     # (num_t-2,)
     t_vals = torch.linspace(0, 1, num_t)[1:-1]
     interior_pts = (
-        z_start.unsqueeze(0) * (1 - t_vals.unsqueeze(1)) +
-        z_end.unsqueeze(0) * t_vals.unsqueeze(1)
-    ).detach().clone().requires_grad_(True)
+        (
+            z_start.unsqueeze(0) * (1 - t_vals.unsqueeze(1))
+            + z_end.unsqueeze(0) * t_vals.unsqueeze(1)
+        )
+        .detach()
+        .clone()
+        .requires_grad_(True)
+    )
 
     optimizer = torch.optim.Adam([interior_pts], lr=lr)
 
@@ -221,11 +231,111 @@ def compute_geodesic(z_start, z_end, decoder_net, num_t=20, lr=1e-2, num_steps=5
         optimizer.step()
 
     with torch.no_grad():
-        curve_pts = torch.cat([
+        curve_pts = torch.cat(
+            [
+                z_start.unsqueeze(0),
+                interior_pts,
+                z_end.unsqueeze(0),
+            ],
+            dim=0,
+        )
+    return curve_pts
+
+
+def curve_energy_ensemble(interior_pts, z_start, z_end, decoder_nets, ks, ls):
+    """
+    Compute the pull-back curve energy.
+
+    E(c) = sum_i || f(z_{i+1}) - f(z_i) ||^2
+    where f = decoder_net (the decoder mean).
+
+    Parameters:
+    interior_pts: [torch.Tensor] shape (num_t-2, latent_dim), requires_grad=True
+    z_start: [torch.Tensor] shape (latent_dim,)
+    z_end:   [torch.Tensor] shape (latent_dim,)
+    decoder_nets: [list of torch.nn.Module] list of decoder networks in the ensemble
+    ks, ls: [torch.Tensor] shape (S,) random indices for Monte Carlo sampling of pairs of decoders
+
+    Returns:
+    energy: [torch.Tensor] scalar
+    """
+    curve_pts = torch.cat(
+        [
             z_start.unsqueeze(0),
             interior_pts,
             z_end.unsqueeze(0),
-        ], dim=0)
+        ],
+        dim=0,
+    )  # (num_t, latent_dim)
+
+    S = len(ks)
+    energy = torch.zeros(1, device=interior_pts.device)
+    for s in range(S):
+        out_k = decoder_nets[ks[s]](curve_pts).reshape(
+            curve_pts.shape[0], -1
+        )  # (num_t, 784)
+        out_l = decoder_nets[ls[s]](curve_pts).reshape(
+            curve_pts.shape[0], -1
+        )  # (num_t, 784)
+        diffs = out_k[1:] - out_l[:-1]  # (num_t-1, 784)
+        energy = energy + (diffs**2).sum()
+
+    return energy / S
+
+
+def compute_geodesic_ensemble(
+    z_start, z_end, decoder_nets, S=4, num_t=20, lr=1e-2, num_steps=500
+):
+    """
+    Compute the geodesic between z_start and z_end under the pull-back metric of an ensemble of decoder_nets by minimizing the average curve energy.
+    Parameters:
+    z_start: [torch.Tensor] shape (latent_dim,)
+    z_end:   [torch.Tensor] shape (latent_dim,)
+    decoder_nets: [list of torch.nn.Module] list of decoder networks in the ensemble
+    S: [int] number of Monte Carlo samples to use for approximating the average curve energy
+    num_t: [int] total number of curve points including endpoints
+    lr: [float] Adam learning rate
+    num_steps: [int] number of gradient steps
+    """
+    device = next(decoder_nets[0].parameters()).device
+    z_start = z_start.to(device)
+    z_end = z_end.to(device)
+
+    t_vals = torch.linspace(0, 1, num_t, device=device)[1:-1]
+    interior_pts = (
+        (
+            z_start.unsqueeze(0) * (1 - t_vals.unsqueeze(1))
+            + z_end.unsqueeze(0) * t_vals.unsqueeze(1)
+        )
+        .detach()
+        .clone()
+        .requires_grad_(True)
+    )
+
+    optimizer = torch.optim.Adam([interior_pts], lr=lr)
+    M = len(decoder_nets)
+    ks, ls = (
+        np.random.choice(M, size=(S,)).tolist(),
+        np.random.choice(M, size=(S,)).tolist(),
+    )
+
+    for _ in range(num_steps):
+        optimizer.zero_grad()
+        energy = curve_energy_ensemble(
+            interior_pts, z_start, z_end, decoder_nets, ks, ls
+        )
+        energy.backward()
+        optimizer.step()
+
+    with torch.no_grad():
+        curve_pts = torch.cat(
+            [
+                z_start.unsqueeze(0),
+                interior_pts,
+                z_end.unsqueeze(0),
+            ],
+            dim=0,
+        )
     return curve_pts
 
 
@@ -258,7 +368,7 @@ def train(model, optimizer, data_loader, epochs, device):
             try:
                 x = next(iter(data_loader))[0]
                 x = noise(x.to(device))
-                model = model
+                model = model.to(device)
                 optimizer.zero_grad()
                 # from IPython import embed; embed()
                 loss = model(x)
@@ -281,19 +391,74 @@ def train(model, optimizer, data_loader, epochs, device):
                 break
 
 
-if __name__ == "__main__":
-    from torchvision import datasets, transforms
-    from torchvision.utils import save_image
+def new_decoder():
+    decoder_net = nn.Sequential(
+        nn.Linear(M, 512),
+        nn.Unflatten(-1, (32, 4, 4)),
+        nn.Softmax(),
+        nn.BatchNorm2d(32),
+        nn.ConvTranspose2d(32, 32, 3, stride=2, padding=1, output_padding=0),
+        nn.Softmax(),
+        nn.BatchNorm2d(32),
+        nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),
+        nn.Softmax(),
+        nn.BatchNorm2d(16),
+        nn.ConvTranspose2d(16, 1, 3, stride=2, padding=1, output_padding=1),
+    )
+    return decoder_net
 
+
+def train_ensemble(
+    model,
+    optimizer,
+    data_loader,
+    epochs_per_decoder,
+    device,
+    num_decoders,
+):
+    # Train encoder and 1st decoder
+    train(model, optimizer, data_loader, epochs_per_decoder, device)
+    decoder_nets = [deepcopy(model.decoder.decoder_net)]
+    # Freeze encoder parameters
+    for param in model.encoder.parameters():
+        param.requires_grad = False
+    for _ in tqdm(
+        range(num_decoders - 1),
+        desc="Training ensemble decoders",
+        total=num_decoders - 1,
+    ):
+        # Add new decoder to the ensemble
+        model.decoder = GaussianDecoder(new_decoder()).to(device)
+        optimizer = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3
+        )
+        # Train new decoder
+        train(model, optimizer, data_loader, epochs_per_decoder, device)
+        decoder_nets.append(deepcopy(model.decoder.decoder_net))
+
+    return model, decoder_nets
+
+
+if __name__ == "__main__":
     # Parse arguments
     import argparse
+
+    from torchvision import datasets, transforms
+    from torchvision.utils import save_image
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "mode",
         type=str,
         default="train",
-        choices=["train", "sample", "eval", "geodesics"],
+        choices=[
+            "train",
+            "sample",
+            "eval",
+            "geodesics",
+            "train_ensemble",
+            "geodesics_ensemble",
+        ],
         help="what to do when running the script (default: %(default)s)",
     )
     parser.add_argument(
@@ -365,6 +530,13 @@ if __name__ == "__main__":
         metavar="N",
         help="number of points along the curve (default: %(default)s)",
     )
+    parser.add_argument(
+        "--monte-carlo-samples",
+        type=int,
+        default=4,
+        metavar="N",
+        help="number of Monte Carlo samples for ensemble geodesic (default: %(default)s)",
+    )
 
     args = parser.parse_args()
     print("# Options")
@@ -426,25 +598,35 @@ if __name__ == "__main__":
         )
         return encoder_net
 
-    def new_decoder():
-        decoder_net = nn.Sequential(
-            nn.Linear(M, 512),
-            nn.Unflatten(-1, (32, 4, 4)),
-            nn.Softmax(),
-            nn.BatchNorm2d(32),
-            nn.ConvTranspose2d(32, 32, 3, stride=2, padding=1, output_padding=0),
-            nn.Softmax(),
-            nn.BatchNorm2d(32),
-            nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),
-            nn.Softmax(),
-            nn.BatchNorm2d(16),
-            nn.ConvTranspose2d(16, 1, 3, stride=2, padding=1, output_padding=1),
-        )
-        return decoder_net
+    def load_trained_model(model_path):
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoder(new_decoder()),
+            GaussianEncoder(new_encoder()),
+        ).to(device)
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        model.eval()
+        return model
+
+    def compute_latent_points(model):
+        all_z = []
+        all_y = []
+        with torch.no_grad():
+            for x, y in mnist_test_loader:
+                x = x.to(device)
+                # (batch, 2)
+                z_mean = model.encoder(x).mean
+                all_z.append(z_mean.cpu())
+                all_y.append(y.cpu())
+        # (N, 2)
+        all_z = torch.cat(all_z, dim=0)
+        # (N,)
+        all_y = torch.cat(all_y, dim=0)
+
+        return all_z, all_y
 
     # Choose mode to run
     if args.mode == "train":
-
         experiments_folder = args.experiment_folder
         os.makedirs(f"{experiments_folder}", exist_ok=True)
         model = VAE(
@@ -467,6 +649,36 @@ if __name__ == "__main__":
             f"{experiments_folder}/model.pt",
         )
 
+    elif args.mode == "train_ensemble":
+        experiments_folder = args.experiment_folder
+        os.makedirs(f"{experiments_folder}", exist_ok=True)
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoder(new_decoder()),
+            GaussianEncoder(new_encoder()),
+        ).to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        model, decoder_nets = train_ensemble(
+            model,
+            optimizer,
+            mnist_train_loader,
+            args.epochs_per_decoder,
+            args.device,
+            args.num_decoders,
+        )
+        os.makedirs(f"{experiments_folder}", exist_ok=True)
+
+        torch.save(
+            model.state_dict(),
+            f"{experiments_folder}/model.pt",
+        )
+
+        for i, decoder_net in enumerate(decoder_nets):
+            torch.save(
+                decoder_net.state_dict(),
+                f"{experiments_folder}/decoder_{i}.pt",
+            )
+
     elif args.mode == "sample":
         model = VAE(
             GaussianPrior(M),
@@ -488,13 +700,7 @@ if __name__ == "__main__":
 
     elif args.mode == "eval":
         # Load trained model
-        model = VAE(
-            GaussianPrior(M),
-            GaussianDecoder(new_decoder()),
-            GaussianEncoder(new_encoder()),
-        ).to(device)
-        model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
-        model.eval()
+        model = load_trained_model(args.experiment_folder + "/model.pt")
 
         elbos = []
         with torch.no_grad():
@@ -506,40 +712,22 @@ if __name__ == "__main__":
         print("Print mean test elbo:", mean_elbo)
 
     elif args.mode == "geodesics":
-
-        model = VAE(
-            GaussianPrior(M),
-            GaussianDecoder(new_decoder()),
-            GaussianEncoder(new_encoder()),
-        ).to(device)
-        model.load_state_dict(
-            torch.load(args.experiment_folder + "/model.pt", map_location=device)
-        )
-        model.eval()
-
-        all_z = []
-        all_y = []
-        with torch.no_grad():
-            for x, y in mnist_test_loader:
-                x = x.to(device)
-                # (batch, 2)
-                z_mean = model.encoder(x).mean
-                all_z.append(z_mean.cpu())
-                all_y.append(y.cpu())
-        # (N, 2)
-        all_z = torch.cat(all_z, dim=0)
-        # (N,)
-        all_y = torch.cat(all_y, dim=0)
+        model = load_trained_model(args.experiment_folder + "/model.pt")
+        all_z, all_y = compute_latent_points(model)
 
         num_pairs = args.num_curves
         torch.manual_seed(42)
-        idx = torch.randperm(len(all_z))[:num_pairs * 2]
+        idx = torch.randperm(len(all_z))[: num_pairs * 2]
         pairs = idx.reshape(num_pairs, 2)
 
         fig, ax = plt.subplots(figsize=(8, 8))
         scatter = ax.scatter(
-            all_z[:, 0].numpy(), all_z[:, 1].numpy(),
-            c=all_y.numpy(), cmap="tab10", s=5, alpha=0.5
+            all_z[:, 0].numpy(),
+            all_z[:, 1].numpy(),
+            c=all_y.numpy(),
+            cmap="tab10",
+            s=5,
+            alpha=0.5,
         )
         plt.colorbar(scatter, ax=ax, label="class")
 
@@ -551,12 +739,14 @@ if __name__ == "__main__":
             z_start = all_z[a]
             z_end = all_z[b]
             curve = compute_geodesic(
-                z_start, z_end, decoder_net,
-                num_t=args.num_t, lr=1e-2, num_steps=500
+                z_start, z_end, decoder_net, num_t=args.num_t, lr=1e-2, num_steps=500
             )
             ax.plot(
-                curve[:, 0].numpy(), curve[:, 1].numpy(),
-                color="black", linewidth=0.8, alpha=0.7
+                curve[:, 0].numpy(),
+                curve[:, 1].numpy(),
+                color="black",
+                linewidth=0.8,
+                alpha=0.7,
             )
             if (i + 1) % 5 == 0:
                 print(f"  {i + 1}/{num_pairs} done")
@@ -567,5 +757,69 @@ if __name__ == "__main__":
         plt.tight_layout()
 
         out_path = os.path.join(args.experiment_folder, "geodesics_partA.png")
+        plt.savefig(out_path, dpi=150)
+        print(f"Saved plot to {out_path}")
+
+    elif args.mode == "geodesics_ensemble":
+        decoder_nets = []
+        for i in range(args.num_decoders):
+            decoder_net = new_decoder().to(device)
+            decoder_net.load_state_dict(
+                torch.load(
+                    args.experiment_folder + f"/decoder_{i}.pt", map_location=device
+                )
+            )
+            decoder_net.eval()
+            decoder_nets.append(decoder_net)
+
+        model = load_trained_model(args.experiment_folder + "/model.pt")
+        all_z, all_y = compute_latent_points(model)
+
+        num_pairs = args.num_curves
+        torch.manual_seed(42)
+        idx = torch.randperm(len(all_z))[: num_pairs * 2]
+        pairs = idx.reshape(num_pairs, 2)
+
+        fig, ax = plt.subplots(figsize=(8, 8))
+        scatter = ax.scatter(
+            all_z[:, 0].numpy(),
+            all_z[:, 1].numpy(),
+            c=all_y.numpy(),
+            cmap="tab10",
+            s=5,
+            alpha=0.5,
+        )
+        plt.colorbar(scatter, ax=ax, label="class")
+
+        print(f"Computing {num_pairs} ensemble geodesics...")
+        for i, (a, b) in enumerate(pairs):
+            z_start = all_z[a]
+            z_end = all_z[b]
+            curve = compute_geodesic_ensemble(
+                z_start,
+                z_end,
+                decoder_nets,
+                S=args.monte_carlo_samples,
+                num_t=args.num_t,
+                lr=1e-2,
+                num_steps=500,
+            )
+            curve_cpu = curve.detach().cpu()
+            ax.plot(
+                curve_cpu[:, 0].numpy(),
+                curve_cpu[:, 1].numpy(),
+                color="black",
+                linewidth=0.8,
+                alpha=0.7,
+            )
+            if (i + 1) % 5 == 0:
+                print(f"  {i + 1}/{num_pairs} done")
+
+        ax.set_title("Latent space with ensemble pull-back geodesics (Part B)")
+        ax.set_xlabel("z1")
+        ax.set_ylabel("z2")
+        plt.tight_layout()
+
+        out_path = os.path.join(args.experiment_folder, "geodesics_partB.png")
         plt.savefig(out_path, dpi=150)
         print(f"Saved plot to {out_path}")

@@ -268,19 +268,19 @@ def curve_energy_ensemble(interior_pts, z_start, z_end, decoder_nets, ks, ls):
         dim=0,
     )  # (num_t, latent_dim)
 
-    S = len(ks)
-    energy = torch.zeros(1, device=interior_pts.device)
-    for s in range(S):
-        out_k = decoder_nets[ks[s]](curve_pts).reshape(
-            curve_pts.shape[0], -1
-        )  # (num_t, 784)
-        out_l = decoder_nets[ls[s]](curve_pts).reshape(
-            curve_pts.shape[0], -1
-        )  # (num_t, 784)
-        diffs = out_k[1:] - out_l[:-1]  # (num_t-1, 784)
-        energy = energy + (diffs**2).sum()
+    # Cache: only call each unique decoder once
+    cache = {}
+    for idx in set(ks + ls):
+        cache[idx] = decoder_nets[idx](curve_pts).reshape(curve_pts.shape[0], -1)  # (T, 784)
 
-    return energy / S
+    # Vectorized diff computation
+    S = len(ks)
+    out_k = torch.stack([cache[k] for k in ks])  # (S, T, 784)
+    out_l = torch.stack([cache[l] for l in ls])  # (S, T, 784)
+    diffs = out_k[:, 1:] - out_l[:, :-1]         # (S, T-1, 784)
+    energy = (diffs ** 2).sum() / S
+
+    return energy
 
 
 def compute_geodesic_ensemble(

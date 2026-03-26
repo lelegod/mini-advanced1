@@ -438,6 +438,128 @@ def train_ensemble(
 
     return model, decoder_nets
 
+def compute_curve_length_ensemble(curve_pts, decoder_nets):
+    """
+    Computes the expected curve length in the observation space 
+    (pull-back metric length) by averaging across the ensemble of decoders.
+    """
+    device = curve_pts.device
+    total_length = 0.0
+    
+    with torch.no_grad():
+        for net in decoder_nets:
+            # The inner decoder nets 
+            decoded = net(curve_pts) 
+            decoded_flat = decoded.reshape(decoded.shape[0], -1)
+            
+            # Calculate Euclidean discrete step lengths
+            diffs = decoded_flat[1:] - decoded_flat[:-1]
+            length = torch.sqrt((diffs**2).sum(dim=1)).sum().item()
+            total_length += length
+            
+    # Average expected length over the active decoders
+    return total_length / len(decoder_nets)
+
+
+def run_cov_evaluation(args, device, M, train_loader, test_loader):
+    """
+    Trains M=10 models, fixes 10 observation pairs, and calculates the CoV 
+    for Euclidean and Geodesic distances using 1 to args.num_decoders.
+    """
+    
+    all_models_encoders = []
+    all_models_decoders = []
+    
+    num_retrainings = args.num_reruns if hasattr(args, 'num_reruns') else 10
+    print(f"Starting {num_retrainings} VAE Retrainings")
+    
+    for m in range(num_retrainings):
+        print(f"\n>> Training Model {m+1}/{num_retrainings}")
+        
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoder(new_decoder()),
+            GaussianEncoder(new_encoder()),
+        ).to(device)
+        
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        
+        model, decoder_nets = train_ensemble(
+            model,
+            optimizer,
+            train_loader,
+            args.epochs_per_decoder,
+            device,
+            args.num_decoders,
+        )
+        
+        model.eval()
+        for net in decoder_nets:
+            net.eval()
+            
+        all_models_encoders.append(model.encoder)
+        all_models_decoders.append(decoder_nets)
+        
+    # Fix point pairs from the test data
+    x_batch, _ = next(iter(test_loader))
+    x_batch = x_batch.to(device)
+    
+    num_pairs = args.num_curves if hasattr(args, 'num_curves') else 10
+    torch.manual_seed(42)
+    idx = torch.randperm(x_batch.size(0))[:num_pairs * 2]
+    pairs = idx.reshape(num_pairs, 2)
+    
+    fixed_pairs_data = [(x_batch[a], x_batch[b]) for a, b in pairs]
+    
+    K_values = list(range(1, args.num_decoders + 1))
+    avg_cov_euclidean = []
+    avg_cov_geodesic = []
+    
+    # Evaluate distances
+    for K in K_values:
+        print(f"\nEvaluating for K={K} decoders...")
+        pair_cov_euclidean = []
+        pair_cov_geodesic = []
+        
+        for pair_idx, (y_i, y_j) in enumerate(fixed_pairs_data):
+            d_euclidean = []
+            d_geodesic = []
+            
+            for m in range(num_retrainings):
+                encoder = all_models_encoders[m]
+                active_decoders = all_models_decoders[m][:K]
+                
+                with torch.no_grad():
+                    z_i = encoder(y_i.unsqueeze(0)).mean.squeeze(0)
+                    z_j = encoder(y_j.unsqueeze(0)).mean.squeeze(0)
+                
+                # Euclidean Distance in latent space
+                d_euclidean.append(torch.norm(z_i - z_j).item())
+                
+                # Geodesic Distance
+                curve = compute_geodesic_ensemble(
+                    z_i, z_j, active_decoders, 
+                    S=args.monte_carlo_samples, 
+                    num_t=args.num_t, 
+                    lr=1e-2, 
+                    num_steps=500
+                )
+                
+                length = compute_curve_length_ensemble(curve, active_decoders)
+                d_geodesic.append(length)
+            
+            # Compute CoV across the retrained models
+            cov_e = np.std(d_euclidean) / np.mean(d_euclidean) if np.mean(d_euclidean) > 0 else 0
+            cov_g = np.std(d_geodesic) / np.mean(d_geodesic) if np.mean(d_geodesic) > 0 else 0
+            
+            pair_cov_euclidean.append(cov_e)
+            pair_cov_geodesic.append(cov_g)
+            
+        # Store average CoV across all pairs
+        avg_cov_euclidean.append(np.mean(pair_cov_euclidean))
+        avg_cov_geodesic.append(np.mean(pair_cov_geodesic))
+        
+    return K_values, avg_cov_euclidean, avg_cov_geodesic
 
 if __name__ == "__main__":
     # Parse arguments
@@ -458,6 +580,7 @@ if __name__ == "__main__":
             "geodesics",
             "train_ensemble",
             "geodesics_ensemble",
+            "evaluate_cov",
         ],
         help="what to do when running the script (default: %(default)s)",
     )
@@ -823,3 +946,15 @@ if __name__ == "__main__":
         out_path = os.path.join(args.experiment_folder, "geodesics_partB.png")
         plt.savefig(out_path, dpi=150)
         print(f"Saved plot to {out_path}")
+
+    elif args.mode == "evaluate_cov":
+        print("Starting CoV Evaluation...")
+        os.makedirs(args.experiment_folder, exist_ok=True)
+        
+        K_values, avg_cov_e, avg_cov_g = run_cov_evaluation(
+            args=args, 
+            device=device, 
+            M=M, 
+            train_loader=mnist_train_loader, 
+            test_loader=mnist_test_loader
+        )

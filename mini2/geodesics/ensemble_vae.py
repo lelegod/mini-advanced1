@@ -561,6 +561,28 @@ def run_cov_evaluation(args, device, M, train_loader, test_loader):
         
     return K_values, avg_cov_euclidean, avg_cov_geodesic
 
+def plot_cov_results(K_values, avg_cov_euclidean, avg_cov_geodesic, num_pairs, save_dir):
+    """
+    Plots the final CoV results as a function of the number of decoders.
+    """
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(K_values, avg_cov_euclidean, marker='o', label='Euclidean Distance', linestyle='--', color='blue')
+    ax.plot(K_values, avg_cov_geodesic, marker='s', label='Geodesic Distance', linestyle='-', color='red')
+    
+    ax.set_title("Coefficient of Variation (CoV) vs. Ensemble Decoders")
+    ax.set_xlabel("Number of Ensemble Decoders")
+    ax.set_ylabel(f"Average CoV (across {num_pairs} pairs)")
+    ax.set_xticks(K_values)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    out_path = os.path.join(save_dir, "cov_plot.png")
+    plt.savefig(out_path, dpi=150)
+    print(f"Saved CoV plot to {out_path}")
+    plt.show()
+
 if __name__ == "__main__":
     # Parse arguments
     import argparse
@@ -957,4 +979,12 @@ if __name__ == "__main__":
             M=M, 
             train_loader=mnist_train_loader, 
             test_loader=mnist_test_loader
+        )
+
+        plot_cov_results(
+            K_values, 
+            avg_cov_e, 
+            avg_cov_g, 
+            num_pairs=args.num_curves, 
+            save_dir=args.experiment_folder
         )

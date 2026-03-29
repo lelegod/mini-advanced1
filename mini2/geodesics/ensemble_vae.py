@@ -441,25 +441,34 @@ def train_ensemble(
 
 def compute_curve_length_ensemble(curve_pts, decoder_nets):
     """
-    Computes the expected curve length in the observation space 
-    (pull-back metric length) by averaging across the ensemble of decoders.
+    Computes the continuous curve length in the observation space 
+    under the exact model-average metric.
+    L(c) = sum_i sqrt( E_{l,k} [||f_l(c_i) - f_k(c_{i+1})||^2] )
     """
-    device = curve_pts.device
     total_length = 0.0
     
     with torch.no_grad():
+        cache = []
         for net in decoder_nets:
-            # The inner decoder nets 
-            decoded = net(curve_pts) 
-            decoded_flat = decoded.reshape(decoded.shape[0], -1)
+            decoded = net(curve_pts)
+            cache.append(decoded.reshape(decoded.shape[0], -1))
+        out_all = torch.stack(cache) # (num_decs, num_pts, 784)
+        
+        num_pts = curve_pts.shape[0]
+        for i in range(num_pts - 1):
+            f_l = out_all[:, i, :] # (num_decs, 784)
+            f_k = out_all[:, i+1, :] # (num_decs, 784)
             
-            # Calculate Euclidean discrete step lengths
-            diffs = decoded_flat[1:] - decoded_flat[:-1]
-            length = torch.sqrt((diffs**2).sum(dim=1)).sum().item()
-            total_length += length
+            diffs = f_l.unsqueeze(1) - f_k.unsqueeze(0) # (num_decs, num_decs, 784)
             
-    # Average expected length over the active decoders
-    return total_length / len(decoder_nets)
+            sq_dists = (diffs**2).sum(dim=2)
+            
+            expected_sq_dist = sq_dists.mean()
+            
+            step_length = torch.sqrt(expected_sq_dist).item()
+            total_length += step_length
+            
+    return total_length
 
 
 def run_cov_evaluation(args, device, M, train_loader, test_loader):

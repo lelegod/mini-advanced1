@@ -314,13 +314,14 @@ def compute_geodesic_ensemble(
 
     optimizer = torch.optim.Adam([interior_pts], lr=lr)
     M = len(decoder_nets)
-    ks, ls = (
-        np.random.choice(M, size=(S,)).tolist(),
-        np.random.choice(M, size=(S,)).tolist(),
-    )
 
     for _ in range(num_steps):
         optimizer.zero_grad()
+
+        ks, ls = (
+            np.random.choice(M, size=(S,)).tolist(),
+            np.random.choice(M, size=(S,)).tolist(),
+        )
         energy = curve_energy_ensemble(
             interior_pts, z_start, z_end, decoder_nets, ks, ls
         )
@@ -664,7 +665,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-curves",
         type=int,
-        default=10,
+        default=25,
         metavar="N",
         help="number of geodesics to plot (default: %(default)s)",
     )

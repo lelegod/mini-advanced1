@@ -17,6 +17,7 @@ import torch.nn as nn
 import torch.utils.data
 from tqdm import tqdm
 
+M = 2  # Default latent dimension
 
 class GaussianPrior(nn.Module):
     def __init__(self, M):
@@ -592,6 +593,20 @@ def plot_cov_results(K_values, avg_cov_euclidean, avg_cov_geodesic, num_pairs, s
     plt.savefig(out_path, dpi=150)
     print(f"Saved CoV plot to {out_path}")
     plt.show()
+
+def new_encoder():
+    encoder_net = nn.Sequential(
+        nn.Conv2d(1, 16, 3, stride=2, padding=1),
+        nn.Softmax(),
+        nn.BatchNorm2d(16),
+        nn.Conv2d(16, 32, 3, stride=2, padding=1),
+        nn.Softmax(),
+        nn.BatchNorm2d(32),
+        nn.Conv2d(32, 32, 3, stride=2, padding=1),
+        nn.Flatten(),
+        nn.Linear(512, 2 * M),
+    )
+    return encoder_net
 
 if __name__ == "__main__":
     # Parse arguments

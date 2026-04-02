@@ -25,7 +25,8 @@ from tqdm import tqdm
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-DEVICE = "mps"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 M = 2  # latent dim
 NUM_PAIRS = 25
 NUM_T = 20
@@ -34,8 +35,8 @@ LR = 1e-2
 SEED = 42
 NUM_CLASSES = 3
 NUM_TEST_DATA = 2048
-PART_A_FOLDER = "experiment_partA"
-PART_B_FOLDER = "partB"
+PART_A_FOLDER = os.path.join(BASE_DIR, "experiment_partA")
+PART_B_FOLDER = os.path.join(BASE_DIR, "partB")
 NUM_DECODERS = 10  # decoder_0..decoder_9 in partB
 MC_SAMPLES = 4
 

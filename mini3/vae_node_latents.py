@@ -1,3 +1,4 @@
+import os
 import argparse
 
 import torch
@@ -197,6 +198,10 @@ def sample(num_samples, model_path):
         latent_dim=16
     )
 
+    if not os.path.exists(model_path):
+        print(f"Error: Model file '{model_path}' not found.")
+        return
+
     model.load_state_dict(torch.load(model_path))
     model.eval()
 
@@ -207,13 +212,15 @@ def sample(num_samples, model_path):
 
     graphs = generator.forward(num_samples)
 
-    torch.save(graphs, ".\\mini3\\generated_graphs_vae.pt")
+    output_path = os.path.join("mini3", "generated_graphs_vae.pt")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    torch.save(graphs, output_path)
 
-    print(f"Generated {len(graphs)} graphs.")
+    print(f"Generated {len(graphs)} graphs and saved to {output_path}.")
 
 def main():
     parser = argparse.ArgumentParser()
-    model_path = ".\\mini3\\vae_node_latent.pt"
+    parser.add_argument("--model", type=str, default="vae_node_latent.pt", help="Path to the model weights file.")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -227,10 +234,10 @@ def main():
     args = parser.parse_args()
 
     if args.command == "train":
-        train(model_path)
+        train(args.model)
 
     elif args.command == "sample":
-        sample(args.num_samples, model_path)
+        sample(args.num_samples, args.model)
 
 
 if __name__ == "__main__":

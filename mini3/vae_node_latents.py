@@ -10,7 +10,7 @@ from torch_geometric.utils import to_dense_adj
 from torch_geometric.datasets import TUDataset
 
 LOGITS_DENOMINATOR = 4
-EDGE_PROBABILITY_CUTOFF = 0.65
+EDGE_PROBABILITY_CUTOFF = 0.5
 
 class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_dim, latent_dim):
@@ -39,7 +39,13 @@ class NodeVAE(nn.Module):
     def __init__(self, in_channels, hidden_dim, latent_dim):
         super().__init__()
         self.encoder = Encoder(in_channels, hidden_dim, latent_dim)
-        self.bias = torch.nn.Parameter(torch.tensor([-3.0])) # Start at ~Sigmoid(-3) = 0.04
+        
+        # New MLP Decoder: Takes concat([zi, zj]) which has size latent_dim * 2
+        self.decoder_mlp = nn.Sequential(
+            nn.Linear(latent_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
 
     def reparameterize(self, mu, logstd):
         std = torch.exp(logstd)
@@ -47,7 +53,18 @@ class NodeVAE(nn.Module):
         return mu + eps * std
 
     def decode(self, z):
-        return (z @ z.t()) / LOGITS_DENOMINATOR
+        num_nodes = z.size(0)
+        
+        # 1. Expand z to create all possible pairs (N, N, latent_dim)
+        z_i = z.unsqueeze(1).expand(-1, num_nodes, -1)
+        z_j = z.unsqueeze(0).expand(num_nodes, -1, -1)
+        
+        # 2. Concatenate pairs to get (N, N, latent_dim * 2)
+        z_cat = torch.cat([z_i, z_j], dim=-1)
+        
+        # 3. Pass through MLP and remove the last dimension
+        logits = self.decoder_mlp(z_cat).squeeze(-1)
+        return logits
 
 
 import numpy as np
@@ -60,21 +77,25 @@ class NodeLatentVAEGenerator:
         self.model = model
 
     def sample_graph_from_posterior(self, g):
-        x = g.x
-        edge_index = g.edge_index
+        self.model.eval()
+        with torch.no_grad():
+            x = g.x
+            edge_index = g.edge_index
 
-        mu, logstd = self.model.encoder(x, edge_index)
-        z = self.model.reparameterize(mu, logstd)
+            mu, logstd = self.model.encoder(x, edge_index)
+            z = self.model.reparameterize(mu, logstd)
 
-        logits = self.model.decode(z) + self.model.bias
-        prob_adj = torch.sigmoid(logits)
+            # Use the new MLP decoder
+            logits = self.model.decode(z)
+            prob_adj = torch.sigmoid(logits)
 
-        prob_adj.fill_diagonal_(0)
+            prob_adj.fill_diagonal_(0)
 
-        adj = (prob_adj > EDGE_PROBABILITY_CUTOFF).float()
-        edge_index_new = adj.nonzero(as_tuple=False).t().contiguous()
+            print(prob_adj)
+            adj = (prob_adj > EDGE_PROBABILITY_CUTOFF).float()
+            edge_index_new = adj.nonzero(as_tuple=False).t().contiguous()
 
-        return Data(edge_index=edge_index_new, num_nodes=g.num_nodes)
+            return Data(edge_index=edge_index_new, num_nodes=g.num_nodes)
 
 
     def forward(self, num_samples=1):
@@ -125,7 +146,7 @@ def train_vae(train_dataset, model, epochs=50):
 
             # Reconstruction: Inner product decoder
             # 1. Compute logits
-            logits = (z @ z.t()) / LOGITS_DENOMINATOR + model.bias
+            logits = (z @ z.t()) / LOGITS_DENOMINATOR
 
             # 2. Build correct adjacency (block-diagonal)
             adj_dense = torch.zeros_like(logits)
@@ -179,7 +200,7 @@ def train_vae(train_dataset, model, epochs=50):
             kl = kl / data.num_nodes 
 
             # Warm-up schedule: reach 1.0 faster (e.g., by epoch 20)
-            beta = min(1.0, epoch / 5) 
+            beta = min(1.0, epoch / 20) 
             
             loss = recon_loss + beta * kl
             loss.backward()

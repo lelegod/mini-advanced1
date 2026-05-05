@@ -9,7 +9,8 @@ from torch_geometric.nn import GCNConv
 from torch_geometric.utils import to_dense_adj
 from torch_geometric.datasets import TUDataset
 
-LOGITS_DENOMINATOR = 1
+LOGITS_DENOMINATOR = 4
+EDGE_PROBABILITY_CUTOFF = 0.65
 
 class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_dim, latent_dim):
@@ -70,7 +71,7 @@ class NodeLatentVAEGenerator:
 
         prob_adj.fill_diagonal_(0)
 
-        adj = (prob_adj > 0.5).float()
+        adj = (prob_adj > EDGE_PROBABILITY_CUTOFF).float()
         edge_index_new = adj.nonzero(as_tuple=False).t().contiguous()
 
         return Data(edge_index=edge_index_new, num_nodes=g.num_nodes)

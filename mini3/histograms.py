@@ -55,8 +55,8 @@ def main():
 
     # Load generated samples
     try:
-        er_graphs = torch.load("generated_graphs_erdos_renyi.pt", weights_only=False)
-        vae_graphs = torch.load("generated_graphs_vae.pt", weights_only=False)
+        er_graphs = torch.load("mini3/generated_graphs_erdos_renyi.pt", weights_only=False)
+        vae_graphs = torch.load("mini3/generated_graphs_vae.pt", weights_only=False)
     except FileNotFoundError as e:
         print(f"File loading error: {e}")
         return
@@ -76,9 +76,8 @@ def main():
     plot_histogram_row(axes, 2, train_eig, er_eig, vae_eig, "Eigenvector Cent.", "lightgreen")
 
     # Save and Show
-    plt.savefig("graph_statistics_histograms.png", dpi=300)
+    plt.savefig("mini3/graph_statistics_histograms.png", dpi=300)
     print("Plot saved successfully as 'graph_statistics_histograms.png'.")
-    plt.show()
 
 if __name__ == "__main__":
     main()

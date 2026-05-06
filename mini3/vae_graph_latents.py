@@ -187,7 +187,7 @@ def sample(num_samples, model_path):
 def main():
     torch.set_printoptions(precision=5, sci_mode=False)
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="vae_graph_latent.pt", help="Path to model weights.")
+    parser.add_argument("--model", type=str, default="mini3/vae_graph_latent.pt", help="Path to model weights.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("train")
     sample_parser = subparsers.add_parser("sample")

@@ -35,8 +35,8 @@ def main():
 
     # Load generated samples
     try:
-        er_graphs = torch.load("generated_graphs_erdos_renyi.pt", weights_only=False)
-        vae_graphs = torch.load("generated_graphs_vae.pt", weights_only=False)
+        er_graphs = torch.load("mini3/generated_graphs_erdos_renyi.pt", weights_only=False)
+        vae_graphs = torch.load("mini3/generated_graphs_vae.pt", weights_only=False)
     except FileNotFoundError as e:
         print(f"File loading error: {e}")
         return

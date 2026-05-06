@@ -153,11 +153,11 @@ if __name__ == "__main__":
     er = ErdosRenyi(train_dataset)
     graphs, adj_matrices = er.forward(num_samples=num_samples)
     dataset = CustomDataset(graphs)
-    torch.save(graphs, "generated_graphs_erdos_renyi.pt")
+    torch.save(graphs, "mini3/generated_graphs_erdos_renyi.pt")
 
     ## Usage:
     # Load the saved graphs (weights_only=False needed for PyG Data objects)
-    saved_graphs = torch.load("generated_graphs_erdos_renyi.pt", weights_only=False)
+    saved_graphs = torch.load("mini3/generated_graphs_erdos_renyi.pt", weights_only=False)
 
     # Create CustomDataset from saved graphs
     custom_dataset = CustomDataset(saved_graphs)

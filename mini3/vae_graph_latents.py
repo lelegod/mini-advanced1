@@ -9,11 +9,11 @@ from torch_geometric.utils import to_dense_adj
 from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
-import numpy as np
 
-# Constants for MUTAG dataset
-MAX_NODES = 28  # Maximum nodes in a MUTAG graph
-EDGE_PROBABILITY_CUTOFF = 0.5
+# Constants
+MAX_NODES = 28  
+EDGE_PROBABILITY_CUTOFF = 0.4  # Slightly lower helps with connectivity
+TEMPERATURE = 1 
 
 class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_dim, latent_dim):
@@ -22,24 +22,18 @@ class Encoder(nn.Module):
         self.conv2 = GCNConv(hidden_dim, hidden_dim)
         self.norm = nn.LayerNorm(hidden_dim)
         
-        # Graph-level latent heads
         self.fc_mu = nn.Linear(hidden_dim, latent_dim)
         self.fc_logstd = nn.Linear(hidden_dim, latent_dim)
 
     def forward(self, x, edge_index, batch):
-        # 1. Node embeddings
         h = self.conv1(x, edge_index)
         h = F.leaky_relu(self.norm(h))
         h = self.conv2(h, edge_index)
         h = F.leaky_relu(h)
         
-        # 2. Global Pooling (Node-level -> Graph-level)
-        hg = global_mean_pool(h, batch) # Result: [batch_size, hidden_dim]
-        
-        # 3. Output graph latents
+        hg = global_mean_pool(h, batch) 
         mu = self.fc_mu(hg)
         logstd = self.fc_logstd(hg)
-        
         return mu, logstd
 
 class GraphVAE(nn.Module):
@@ -48,11 +42,12 @@ class GraphVAE(nn.Module):
         self.max_nodes = max_nodes
         self.encoder = Encoder(in_channels, hidden_dim, latent_dim)
         
-        # Decoder: Maps graph latent back to a flattened adjacency matrix
         self.decoder = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim * 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim * 2, max_nodes * max_nodes)
+            nn.Linear(hidden_dim * 2, hidden_dim * 4),
+            nn.ReLU(),
+            nn.Linear(hidden_dim * 4, max_nodes * max_nodes)
         )
 
     def reparameterize(self, mu, logstd):
@@ -60,9 +55,8 @@ class GraphVAE(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def decode(self, z):
-        # Output flattened logits and reshape to (batch, N, N)
-        logits = self.decoder(z)
+    def decode(self, z, temperature=1.0):
+        logits = self.decoder(z) / temperature
         return logits.view(-1, self.max_nodes, self.max_nodes)
 
 class GraphLatentVAEGenerator:
@@ -73,69 +67,89 @@ class GraphLatentVAEGenerator:
         self.model.eval()
         graphs = []
         with torch.no_grad():
-            # Sample from the prior N(0, I)
             z = torch.randn(num_samples, self.model.encoder.fc_mu.out_features)
-            logits = self.model.decode(z)
+            logits = self.model.decode(z, temperature=TEMPERATURE)
             prob_adj = torch.sigmoid(logits)
 
             for i in range(num_samples):
                 adj = prob_adj[i]
-                # Symmetrize and remove self-loops
                 adj = (adj + adj.t()) / 2
                 adj.fill_diagonal_(0)
-                print(np.round(adj,3))
-                # Apply cutoff
+                total = adj.numel()
+
+                # count elements > 0.2
+                count_gt2 = (adj > 0.2).sum().item()
+                count_gt3 = (adj > 0.3).sum().item()
+                count_gt4 = (adj > 0.4).sum().item()
+                count_gt5 = (adj > 0.5).sum().item()
+                count_gt6 = (adj > 0.6).sum().item()
+                count_gt7 = (adj > 0.7).sum().item()
+                count_gt8 = (adj > 0.8).sum().item()
+
+                print("Total elements:", total)
+                print("Elements > 0.2:", count_gt2)
+                print("Elements > 0.3:", count_gt3)
+                print("Elements > 0.4:", count_gt4)
+                print("Elements > 0.5:", count_gt5)
+                print("Elements > 0.6:", count_gt6)
+                print("Elements > 0.7:", count_gt7)
+                print("Elements > 0.8:", count_gt8)
                 bin_adj = (adj > EDGE_PROBABILITY_CUTOFF).float()
                 edge_index = bin_adj.nonzero(as_tuple=False).t().contiguous()
                 
+                # Basic check: if graph is totally empty, lower threshold for this sample
+                if edge_index.numel() == 0:
+                    bin_adj = (adj > 0.2).float()
+                    edge_index = bin_adj.nonzero(as_tuple=False).t().contiguous()
+
                 graphs.append(Data(edge_index=edge_index, num_nodes=self.model.max_nodes))
         return graphs
 
-def train_vae(train_dataset, model, epochs=200):
+def train_vae(train_dataset, model, epochs=300):
     loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    opt = torch.optim.Adam(model.parameters(), lr=5e-4) # Slightly slower LR
 
     model.train()
     for epoch in range(epochs):
-        total_loss = 0
+        avg_recon, avg_kl, avg_loss = 0, 0, 0
+
         for data in loader:
             opt.zero_grad()
-            
-            # Encode
             mu, logstd = model.encoder(data.x, data.edge_index, data.batch)
             z = model.reparameterize(mu, logstd)
+            logits = model.decode(z, temperature=1.0) # Train at T=1
             
-            # Decode (Reconstruct Adjacency)
-            logits = model.decode(z)
-            
-            # Prepare Target: Dense Adjacency with Padding
-            # to_dense_adj returns [batch, max_nodes_in_batch, max_nodes_in_batch]
+            # Prepare Target
             adj_dense = to_dense_adj(data.edge_index, data.batch)
-            
-            # Pad target to MAX_NODES
             batch_size = adj_dense.size(0)
             target_adj = torch.zeros(batch_size, MAX_NODES, MAX_NODES).to(adj_dense.device)
-            curr_nodes = adj_dense.size(1)
-            target_adj[:, :curr_nodes, :curr_nodes] = adj_dense
+            target_adj[:, :adj_dense.size(1), :adj_dense.size(2)] = adj_dense
 
-            # Loss: Reconstruction (BCE) + KL
-            recon_loss = F.binary_cross_entropy_with_logits(logits, target_adj)
-            kl = -0.5 * torch.mean(torch.sum(1 + 2 * logstd - mu**2 - torch.exp(2 * logstd), dim=1))
+            # Calculate Positional Weight (ratio of zeros to ones)
+            # This helps the model stop being "lazy" and actually predict edges.
+            pos_weight = (MAX_NODES * MAX_NODES - target_adj.sum()) / (target_adj.sum() + 1e-6)
+            pos_weight = torch.clamp(pos_weight, 1.0, 10.0) # Keep it reasonable
+
+            recon_loss = F.binary_cross_entropy_with_logits(
+                logits, target_adj, pos_weight=pos_weight
+            )
             
-            beta = min(0.1, epoch / 100)
-            loss = recon_loss + beta * kl
+            kl_loss = -0.5 * torch.mean(torch.sum(1 + 2 * logstd - mu**2 - torch.exp(2 * logstd), dim=1))
+            
+            # KL Annealing
+            beta = min(0.05, epoch / 500) 
+            loss = recon_loss + (beta * kl_loss)
             
             loss.backward()
             opt.step()
-            total_loss += loss.item()
+
             avg_recon += recon_loss.item()
-            avg_kl += kl.item()
+            avg_kl += kl_loss.item()
             avg_loss += loss.item()
 
-        if epoch % 10 == 0:
+        if epoch % 20 == 0:
             n = len(loader)
-            # More informative loss printing[cite: 1]
-            print(f"Epoch {epoch:03d} | Total: {avg_loss/n:.4f} | Recon: {avg_recon/n:.4f} | KL: {avg_kl/n:.4f} | Beta: {beta:.3f}")
+            print(f"Epoch {epoch:03d} | Loss: {avg_loss/n:.4f} | Recon: {avg_recon/n:.4f} | KL: {avg_kl/n:.4f} | Beta: {beta:.3f}")
 
 def train(model_path):
     dataset = TUDataset(root="./data/", name="MUTAG")
@@ -176,6 +190,7 @@ def sample(num_samples, model_path):
     print(f"Generated {len(graphs)} graphs and saved to {output_path}.")
 
 def main():
+    torch.set_printoptions(precision=5, sci_mode=False)
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="vae_graph_latent.pt", help="Path to model weights.")
     subparsers = parser.add_subparsers(dest="command", required=True)

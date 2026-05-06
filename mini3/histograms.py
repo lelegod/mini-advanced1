@@ -41,9 +41,10 @@ def plot_histogram_row(axes, row_idx, train_data, er_data, vae_data, metric_name
     for col_idx in range(3):
         ax = axes[row_idx, col_idx]
         ax.hist(datasets[col_idx], bins=bins, color=color, alpha=0.7, edgecolor='black', density=True)
-        ax.set_title(titles[col_idx])
-        ax.set_xlabel("Value")
-        ax.set_ylabel("Density")
+        ax.set_title(titles[col_idx], fontsize=14)
+        ax.set_xlabel("Value", fontsize=20)
+        ax.set_ylabel("Density", fontsize=20)
+        ax.tick_params(axis='both', labelsize=16)
         ax.grid(axis='y', alpha=0.3)
 
 def main():
@@ -68,7 +69,7 @@ def main():
 
     # Initialize 3x3 Plot
     fig, axes = plt.subplots(3, 3, figsize=(15, 12), constrained_layout=True)
-    fig.suptitle("Graph Statistics: Empirical vs Generated Distributions", fontsize=16, fontweight='bold')
+    fig.suptitle("Graph Statistics: Empirical vs Generated Distributions", fontsize=30, fontweight='bold')
 
     # Plot Rows
     plot_histogram_row(axes, 0, train_deg, er_deg, vae_deg, "Node Degree", "skyblue")

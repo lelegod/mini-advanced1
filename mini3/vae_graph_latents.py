@@ -75,11 +75,9 @@ class GraphLatentVAEGenerator:
 
             for i in range(num_samples):
                 adj = prob_adj[i]
-                adj = (adj + adj.t()) / 2
-                adj.fill_diagonal_(0)
-                
-                # Create binary adjacency
-                bin_adj = (adj > EDGE_PROBABILITY_CUTOFF).float()
+                upper = torch.triu(adj, diagonal=1)
+                bin_adj = (upper > EDGE_PROBABILITY_CUTOFF).float()
+                bin_adj = bin_adj + bin_adj.t()  # mirror to enforce symmetry
                 
                 # --- PRUNING LOGIC ---
                 # Find nodes that have at least one connection
@@ -127,8 +125,10 @@ def train_vae(train_dataset, model, epochs=300):
             pos_weight = (MAX_NODES * MAX_NODES - target_adj.sum()) / (target_adj.sum() + 1e-6)
             pos_weight = torch.clamp(pos_weight, 1.0, 10.0) # Keep it reasonable
 
+            # Recon Loss (upper triangle only to avoid double-counting undirected edges)
+            mask = torch.triu(torch.ones(MAX_NODES, MAX_NODES, dtype=torch.bool), diagonal=1)
             recon_loss = F.binary_cross_entropy_with_logits(
-                logits, target_adj, #pos_weight=pos_weight
+                logits[:, mask], target_adj[:, mask],
             )
             
             
@@ -177,8 +177,11 @@ def train_vae_diverse(train_dataset, model, epochs=400):
             target_adj = torch.zeros(adj_dense.size(0), MAX_NODES, MAX_NODES).to(adj_dense.device)
             target_adj[:, :adj_dense.size(1), :adj_dense.size(2)] = adj_dense
 
-            # Recon Loss
-            recon_loss = F.binary_cross_entropy_with_logits(logits, target_adj, reduction='mean')
+            # Recon Loss (upper triangle only to avoid double-counting undirected edges)
+            mask = torch.triu(torch.ones(MAX_NODES, MAX_NODES, dtype=torch.bool), diagonal=1)
+            recon_loss = F.binary_cross_entropy_with_logits(
+                logits[:, mask], target_adj[:, mask], reduction='mean'
+            )
             
             # KL Loss with Free Bits
             kl_raw = -0.5 * torch.sum(1 + 2 * logstd - mu**2 - torch.exp(2 * logstd), dim=1)

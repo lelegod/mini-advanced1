@@ -12,8 +12,8 @@ from torch_geometric.data import Data
 
 # Constants for MUTAG dataset
 MAX_NODES = 28  # Maximum nodes in a MUTAG graph
-EDGE_PROBABILITY_CUTOFF = 0.22
-TEMPERATURE = 3
+EDGE_PROBABILITY_CUTOFF = 0.5
+TEMPERATURE = 16
 
 class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_dim, latent_dim):
@@ -108,6 +108,7 @@ def train_vae(train_dataset, model, epochs=300):
         avg_recon = 0
         avg_kl = 0
         avg_loss = 0
+        free_bits = 2.0
         for data in loader:
             opt.zero_grad()
             mu, logstd = model.encoder(data.x, data.edge_index, data.batch)
@@ -126,13 +127,16 @@ def train_vae(train_dataset, model, epochs=300):
             pos_weight = torch.clamp(pos_weight, 1.0, 10.0) # Keep it reasonable
 
             recon_loss = F.binary_cross_entropy_with_logits(
-                logits, target_adj, pos_weight=pos_weight
+                logits, target_adj, #pos_weight=pos_weight
             )
             
-            kl_loss = -0.5 * torch.mean(torch.sum(1 + 2 * logstd - mu**2 - torch.exp(2 * logstd), dim=1))
+            
+            kl_raw = -0.5 * torch.sum(1 + 2 * logstd - mu**2 - torch.exp(2 * logstd), dim=1)
+            kl_loss = torch.mean(torch.clamp(kl_raw, min=free_bits))
+            #kl_loss = -0.5 * torch.mean(torch.sum(1 + 2 * logstd - mu**2 - torch.exp(2 * logstd), dim=1))
             
             # KL Annealing
-            beta = min(0.05, epoch / 500) 
+            beta = 1#min(1, epoch / 100) 
             loss = recon_loss + (beta * kl_loss)
             
             loss.backward()
@@ -149,7 +153,7 @@ def train_vae(train_dataset, model, epochs=300):
 def train(model_path):
     dataset = TUDataset(root="./data/", name="MUTAG")
     rng = torch.Generator().manual_seed(0)
-    train_dataset, _, _ = random_split(dataset, (100, 44, 44), generator=rng)
+    train_dataset = dataset
 
     model = GraphVAE(
         in_channels=dataset.num_features,

@@ -50,7 +50,7 @@ class ErdosRenyi:
         for i in idx.flatten():
             graph = self.train_dataset[i]
             n = graph.num_nodes
-            total_edges[n] += graph.num_edges
+            total_edges[n] += graph.num_edges // 2
             total_possible_edges[n] += n * (n - 1) // 2
 
         r = {}
@@ -58,6 +58,7 @@ class ErdosRenyi:
             if total_possible_edges[n] > 0:
                 r[n] = total_edges[n] / total_possible_edges[n]
             else:
+                print(f"Warning: no training graphs with {n} nodes; using r=0.0 (empty graphs will be generated)", file=sys.stderr)
                 r[n] = 0.0
 
         return r
@@ -136,10 +137,6 @@ class CustomDataset(InMemoryDataset):
 
     def __len__(self):
         return self.length
-
-    def __getitem__(self, idx):
-        sample = self.get(idx)
-        return sample
 
 
 if __name__ == "__main__":

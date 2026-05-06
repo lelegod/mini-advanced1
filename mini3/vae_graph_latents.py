@@ -10,10 +10,10 @@ from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 
-# Constants
-MAX_NODES = 28  
-EDGE_PROBABILITY_CUTOFF = 0.4  # Slightly lower helps with connectivity
-TEMPERATURE = 1 
+# Constants for MUTAG dataset
+MAX_NODES = 28  # Maximum nodes in a MUTAG graph
+EDGE_PROBABILITY_CUTOFF = 0.22
+TEMPERATURE = 3
 
 class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_dim, latent_dim):
@@ -65,8 +65,9 @@ class GraphLatentVAEGenerator:
 
     def forward(self, num_samples=1):
         self.model.eval()
-        graphs = []
+        generated_graphs = []
         with torch.no_grad():
+            # Sample from latent prior
             z = torch.randn(num_samples, self.model.encoder.fc_mu.out_features)
             logits = self.model.decode(z, temperature=TEMPERATURE)
             prob_adj = torch.sigmoid(logits)
@@ -75,35 +76,27 @@ class GraphLatentVAEGenerator:
                 adj = prob_adj[i]
                 adj = (adj + adj.t()) / 2
                 adj.fill_diagonal_(0)
-                total = adj.numel()
-
-                # count elements > 0.2
-                count_gt2 = (adj > 0.2).sum().item()
-                count_gt3 = (adj > 0.3).sum().item()
-                count_gt4 = (adj > 0.4).sum().item()
-                count_gt5 = (adj > 0.5).sum().item()
-                count_gt6 = (adj > 0.6).sum().item()
-                count_gt7 = (adj > 0.7).sum().item()
-                count_gt8 = (adj > 0.8).sum().item()
-
-                print("Total elements:", total)
-                print("Elements > 0.2:", count_gt2)
-                print("Elements > 0.3:", count_gt3)
-                print("Elements > 0.4:", count_gt4)
-                print("Elements > 0.5:", count_gt5)
-                print("Elements > 0.6:", count_gt6)
-                print("Elements > 0.7:", count_gt7)
-                print("Elements > 0.8:", count_gt8)
-                bin_adj = (adj > EDGE_PROBABILITY_CUTOFF).float()
-                edge_index = bin_adj.nonzero(as_tuple=False).t().contiguous()
                 
-                # Basic check: if graph is totally empty, lower threshold for this sample
-                if edge_index.numel() == 0:
-                    bin_adj = (adj > 0.2).float()
-                    edge_index = bin_adj.nonzero(as_tuple=False).t().contiguous()
+                # Create binary adjacency
+                bin_adj = (adj > EDGE_PROBABILITY_CUTOFF).float()
+                
+                # --- PRUNING LOGIC ---
+                # Find nodes that have at least one connection
+                degrees = bin_adj.sum(dim=1)
+                active_nodes = (degrees > 0).nonzero(as_tuple=True)[0]
+                
+                if len(active_nodes) > 0:
+                    # Filter the adjacency matrix to only active nodes
+                    pruned_adj = bin_adj[active_nodes][:, active_nodes]
+                    edge_index = pruned_adj.nonzero(as_tuple=False).t().contiguous()
+                    num_nodes = len(active_nodes)
+                else:
+                    # Fallback for empty graphs: just a single isolated node
+                    edge_index = torch.empty((2, 0), dtype=torch.long)
+                    num_nodes = 1
 
-                graphs.append(Data(edge_index=edge_index, num_nodes=self.model.max_nodes))
-        return graphs
+                generated_graphs.append(Data(edge_index=edge_index, num_nodes=num_nodes))
+        return generated_graphs
 
 def train_vae(train_dataset, model, epochs=300):
     loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
@@ -111,8 +104,10 @@ def train_vae(train_dataset, model, epochs=300):
 
     model.train()
     for epoch in range(epochs):
-        avg_recon, avg_kl, avg_loss = 0, 0, 0
-
+        total_loss = 0
+        avg_recon = 0
+        avg_kl = 0
+        avg_loss = 0
         for data in loader:
             opt.zero_grad()
             mu, logstd = model.encoder(data.x, data.edge_index, data.batch)

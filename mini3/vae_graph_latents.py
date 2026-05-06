@@ -9,11 +9,12 @@ from torch_geometric.utils import to_dense_adj
 from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
+import math
 
 # Constants for MUTAG dataset
 MAX_NODES = 28  # Maximum nodes in a MUTAG graph
-EDGE_PROBABILITY_CUTOFF = 0.5
-TEMPERATURE = 16
+EDGE_PROBABILITY_CUTOFF = 0.3
+TEMPERATURE = 1
 
 class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_dim, latent_dim):
@@ -150,6 +151,52 @@ def train_vae(train_dataset, model, epochs=300):
             n = len(loader)
             print(f"Epoch {epoch:03d} | Loss: {avg_loss/n:.4f} | Recon: {avg_recon/n:.4f} | KL: {avg_kl/n:.4f} | Beta: {beta:.3f}")
 
+def train_vae_diverse(train_dataset, model, epochs=400):
+    loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    
+    # Free bits threshold: Force the model to use at least 2.0 bits of KL
+    free_bits = 2.0 
+
+    model.train()
+    for epoch in range(epochs):
+        # Cyclical Beta: 0 -> 0.02 -> 0 every 100 epochs
+        cycle = 100
+        beta_val = 0.02 * (0.5 * (1 + math.cos(math.pi * (epoch % cycle) / cycle - math.pi)))
+        
+        avg_recon, avg_kl = 0, 0
+
+        for data in loader:
+            opt.zero_grad()
+            mu, logstd = model.encoder(data.x, data.edge_index, data.batch)
+            z = model.reparameterize(mu, logstd)
+            logits = model.decode(z, temperature=1.0)
+            
+            # Target Prep
+            adj_dense = to_dense_adj(data.edge_index, data.batch)
+            target_adj = torch.zeros(adj_dense.size(0), MAX_NODES, MAX_NODES).to(adj_dense.device)
+            target_adj[:, :adj_dense.size(1), :adj_dense.size(2)] = adj_dense
+
+            # Recon Loss
+            recon_loss = F.binary_cross_entropy_with_logits(logits, target_adj, reduction='mean')
+            
+            # KL Loss with Free Bits
+            kl_raw = -0.5 * torch.sum(1 + 2 * logstd - mu**2 - torch.exp(2 * logstd), dim=1)
+            kl_loss = torch.mean(torch.clamp(kl_raw, min=free_bits))
+            
+            loss = recon_loss + (beta_val * kl_loss)
+            loss.backward()
+            
+            # Gradient clipping to prevent exploding updates during beta shifts
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+
+            avg_recon += recon_loss.item()
+            avg_kl += kl_loss.item()
+
+        if epoch % 10 == 0:
+            print(f"Epoch {epoch:03d} | Recon: {avg_recon/len(loader):.4f} | KL: {avg_kl/len(loader):.4f} | Beta: {beta_val:.4f}")
+
 def train(model_path):
     dataset = TUDataset(root="./data/", name="MUTAG")
     rng = torch.Generator().manual_seed(0)
@@ -162,7 +209,7 @@ def train(model_path):
         max_nodes=MAX_NODES
     )
 
-    train_vae(train_dataset, model)
+    train_vae_diverse(train_dataset, model)
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
 

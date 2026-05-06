@@ -10,7 +10,7 @@ from torch_geometric.utils import to_dense_adj
 from torch_geometric.datasets import TUDataset
 
 LOGITS_DENOMINATOR = 4
-EDGE_PROBABILITY_CUTOFF = 0.5
+EDGE_PROBABILITY_CUTOFF = 0.65
 
 class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_dim, latent_dim):
@@ -54,16 +54,14 @@ class NodeVAE(nn.Module):
 
     def decode(self, z):
         num_nodes = z.size(0)
-        
-        # 1. Expand z to create all possible pairs (N, N, latent_dim)
+
         z_i = z.unsqueeze(1).expand(-1, num_nodes, -1)
         z_j = z.unsqueeze(0).expand(num_nodes, -1, -1)
-        
-        # 2. Concatenate pairs to get (N, N, latent_dim * 2)
-        z_cat = torch.cat([z_i, z_j], dim=-1)
-        
-        # 3. Pass through MLP and remove the last dimension
-        logits = self.decoder_mlp(z_cat).squeeze(-1)
+
+        pair = torch.cat([z_i, z_j], dim=-1)  # (N, N, 2*latent)
+
+        logits = self.decoder_mlp(pair).squeeze(-1)  # (N, N)
+
         return logits
 
 
@@ -81,19 +79,26 @@ class NodeLatentVAEGenerator:
         with torch.no_grad():
             x = g.x
             edge_index = g.edge_index
+            print("MUTAG:")
+            print(g)
+            print(g.edge_index)
 
             mu, logstd = self.model.encoder(x, edge_index)
             z = self.model.reparameterize(mu, logstd)
 
-            # Use the new MLP decoder
             logits = self.model.decode(z)
             prob_adj = torch.sigmoid(logits)
 
             prob_adj.fill_diagonal_(0)
 
-            print(prob_adj)
             adj = (prob_adj > EDGE_PROBABILITY_CUTOFF).float()
+            adj = torch.triu(adj, diagonal=1)
+            adj = adj + adj.t()
             edge_index_new = adj.nonzero(as_tuple=False).t().contiguous()
+
+            print("TSOUPO:")
+            print(Data(edge_index=edge_index_new, num_nodes=g.num_nodes))
+            print(prob_adj.mean(), prob_adj.min(), prob_adj.max())
 
             return Data(edge_index=edge_index_new, num_nodes=g.num_nodes)
 
@@ -127,89 +132,84 @@ def train(model_path):
 
 from torch_geometric.loader import DataLoader
 
-def train_vae(train_dataset, model, epochs=50):
-    # Use a DataLoader for stability
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+def train_vae(train_dataset, model, epochs=200):
+    loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     model.train()
 
     for epoch in range(epochs):
         total_loss = 0
-        
-        for data in train_loader:
-            optimizer.zero_grad()
+
+        for data in loader:
+            opt.zero_grad()
 
             x, edge_index, batch = data.x, data.edge_index, data.batch
+
             mu, logstd = model.encoder(x, edge_index)
             z = model.reparameterize(mu, logstd)
 
-            # Reconstruction: Inner product decoder
-            # 1. Compute logits
-            logits = (z @ z.t()) / LOGITS_DENOMINATOR
+            # -----------------------------
+            # INNER PRODUCT DECODER
+            # -----------------------------
+            #logits = z @ z.t()
+            logits = model.decode(z)
 
-            # 2. Build correct adjacency (block-diagonal)
-            adj_dense = torch.zeros_like(logits)
-            adj_dense[edge_index[0], edge_index[1]] = 1.0
+            # -----------------------------
+            # BUILD ADJACENCY (CORRECT)
+            # -----------------------------
+            adj = torch.zeros_like(logits)
 
-            # 3. Mask: same graph, no self-loops
-            same_graph_mask = (batch.unsqueeze(0) == batch.unsqueeze(1))
-            no_self_loop_mask = ~torch.eye(data.num_nodes, device=z.device).bool()
-            final_mask = same_graph_mask & no_self_loop_mask
+            for g_id in batch.unique():
+                node_mask = (batch == g_id)
 
-            # 4. Class imbalance weighting
-            valid_adj = adj_dense[final_mask]
-            num_pos = valid_adj.sum()
-            num_neg = valid_adj.numel() - num_pos
-            pos_weight = num_neg / (num_pos + 1e-6)
+                edge_mask = node_mask[edge_index[0]] & node_mask[edge_index[1]]
+                edges = edge_index[:, edge_mask]
 
-            # 5. BCE loss
+                adj[edges[0], edges[1]] = 1.0
+
+            # symmetrize (undirected graphs)
+            adj = adj + adj.t()
+            adj.fill_diagonal_(0)
+
+            # -----------------------------
+            # MASK (only same graph pairs)
+            # -----------------------------
+            mask = batch.unsqueeze(0) == batch.unsqueeze(1)
+
+            # -----------------------------
+            # LOSS
+            # -----------------------------
+            pos = adj[mask].sum()
+            neg = mask.sum() - pos
+            pos_weight = neg / (pos + 1e-6)
+
             recon_loss = F.binary_cross_entropy_with_logits(
-                logits[final_mask],
-                adj_dense[final_mask],
-                pos_weight=torch.tensor([pos_weight], device=z.device)
-            )
-            
-            """ # Get ground truth adjacency
-            adj = to_dense_adj(edge_index, max_num_nodes=data.num_nodes).squeeze(0)
-
-            # Create mask for all elements EXCEPT the diagonal
-            mask = ~torch.eye(data.num_nodes, device=z.device).bool()
-            #print(mask)
-
-            pos_weight = (adj.numel() - adj.sum()) / (adj.sum())
-
-            # Only apply loss to the actual edges (off-diagonal)
-            recon_loss = F.binary_cross_entropy_with_logits(
-                logits[mask], 
+                logits[mask],
                 adj[mask],
                 pos_weight=pos_weight
-            ) """
-            #print(logits)
-            #print(logits[mask])
-            
-            # Stabilized Loss
-            #recon_loss = F.binary_cross_entropy_with_logits(logits, adj)
+            )
 
-            # Refined KL Divergence
-            # Formula: 0.5 * sum(exp(2*logstd) + mu^2 - 1 - 2*logstd)
-            kl = -0.5 * torch.mean(torch.sum(1 + 2*logstd - mu**2 - torch.exp(2*logstd), dim=1))
-            
-            # Norm factor: helps scale KL relative to the number of nodes
-            # A common trick in VGAE
-            kl = kl / data.num_nodes 
+            # -----------------------------
+            # KL (stable version)
+            # -----------------------------
+            kl = -0.5 * torch.mean(
+                torch.sum(
+                    1 + 2 * logstd - mu**2 - torch.exp(2 * logstd),
+                    dim=1
+                )
+            )
 
-            # Warm-up schedule: reach 1.0 faster (e.g., by epoch 20)
-            beta = min(1.0, epoch / 20) 
-            
+            beta = min(0.1, epoch / 100)
+
             loss = recon_loss + beta * kl
+
             loss.backward()
-            #print(f"Encoder Grad: {model.encoder.conv1.lin.weight.grad.abs().mean().item():.8f}")
-            optimizer.step()
+            opt.step()
 
             total_loss += loss.item()
 
-        print(f"Epoch {epoch:03d} | Avg Loss: {total_loss / len(train_loader):.4f}, recon: {recon_loss:.2f}, beta*kl: {beta*kl:.2f}")
+        print(f"Epoch {epoch:03d} | Loss: {total_loss / len(loader):.4f}")
 
 def sample(num_samples, model_path):
     dataset = TUDataset(root="./data/", name="MUTAG")
